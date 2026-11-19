@@ -3,11 +3,11 @@
 # SSE4.2, no AVX, like the Celeron J4125) and does a replica-set init, a write, an
 # index build and a server-side JavaScript query (mozjs). An AVX instruction on
 # these paths kills mongod with SIGILL; the script then exits with mongod's code (132).
-# Needs qemu-user-static on the host. Usage: test-no-avx.sh <image>
+# Needs a static qemu-x86_64 on the host (Ubuntu: qemu-user). Usage: test-no-avx.sh <image>
 set -euo pipefail
 
 image=$1
-qemu=$(command -v qemu-x86_64-static)
+qemu=$(command -v qemu-x86_64-static || command -v qemu-x86_64)
 name=mongo-no-avx-test
 mongod=$(docker run --rm --entrypoint sh "$image" -c 'command -v mongod')
 

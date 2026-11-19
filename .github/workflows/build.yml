@@ -87,7 +87,7 @@ jobs:
           df -h /
 
       - name: Install QEMU
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user && file "$(command -v qemu-x86_64)"
 
       # The official image needs AVX; if it does not die with SIGILL (132), the test cannot see AVX.
       - name: Check that the test catches AVX
