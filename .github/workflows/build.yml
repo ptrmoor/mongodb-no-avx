@@ -96,6 +96,11 @@ jobs:
           ./test-no-avx.sh docker.io/library/mongo:8.0 || rc=$?
           [[ $rc == 132 ]] || { echo "::error::official mongo:8.0 did not die with SIGILL (exit $rc)"; exit 1; }
 
+      # rnsc's published build of the same Dockerfile must pass, so the test's
+      # passing path is proven before hours of building.
+      - name: Check that the test passes a build without AVX
+        run: ./test-no-avx.sh docker.io/rnsc/mongo-wo-avx:8.0.26
+
       - name: Build
         run: docker build --build-arg MONGO_VERSION="$VERSION" -t "$IMAGE:$VERSION" .
 

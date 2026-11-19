@@ -13,8 +13,8 @@ mongod=$(docker run --rm --entrypoint sh "$image" -c 'command -v mongod')
 
 docker rm -f "$name" >/dev/null 2>&1 || true
 trap 'docker logs "$name" 2>&1 | tail -30; docker rm -f "$name" >/dev/null' EXIT
-# No core dumps: QEMU writing one for a SIGILL took minutes.
-docker run -d --name "$name" --ulimit core=0 -v "$qemu:/qemu:ro" --entrypoint /qemu "$image" \
+# --init: as PID 1, QEMU's own SIGILL would be ignored and it would hang.
+docker run -d --name "$name" --init --ulimit core=0 -v "$qemu:/qemu:ro" --entrypoint /qemu "$image" \
   -cpu Westmere "$mongod" --bind_ip_all --replSet rs0 >/dev/null
 
 exit_if_dead() {
