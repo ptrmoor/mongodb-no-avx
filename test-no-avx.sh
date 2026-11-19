@@ -13,19 +13,26 @@ mongod=$(docker run --rm --entrypoint sh "$image" -c 'command -v mongod')
 
 docker rm -f "$name" >/dev/null 2>&1 || true
 trap 'docker logs "$name" 2>&1 | tail -30; docker rm -f "$name" >/dev/null' EXIT
-docker run -d --name "$name" -v "$qemu:/qemu:ro" --entrypoint /qemu "$image" \
+# No core dumps: QEMU writing one for a SIGILL took minutes.
+docker run -d --name "$name" --ulimit core=0 -v "$qemu:/qemu:ro" --entrypoint /qemu "$image" \
   -cpu Westmere "$mongod" --bind_ip_all --replSet rs0 >/dev/null
 
-# Emulation is slow; give mongod up to 5 minutes to start.
-for _ in $(seq 60); do
+exit_if_dead() {
   if [[ $(docker inspect -f '{{.State.Running}}' "$name") != true ]]; then
     rc=$(docker inspect -f '{{.State.ExitCode}}' "$name")
     echo "mongod exited with code $rc"
     exit "$rc"
   fi
+}
+
+# Emulation is slow; give mongod up to 5 minutes to start.
+for _ in $(seq 60); do
+  exit_if_dead
   docker exec "$name" mongosh --quiet --eval 'db.runCommand({ping: 1}).ok' 2>/dev/null | grep -qx 1 && break
   sleep 5
 done
+sleep 2
+exit_if_dead
 
 docker exec "$name" mongosh --quiet --eval '
   rs.initiate();
