@@ -58,7 +58,11 @@ txt = txt.replace('] if arch == "x86_64" and os != "windows" else [])', '] if Fa
 txt = re.sub(r'"//bazel/config:linux_x86_64": \["-mavx2"\],', '"//bazel/config:linux_x86_64": [],', txt)
 txt = re.sub(r'"//bazel/config:macos_x86_64": \["-mavx2"\],', '"//bazel/config:macos_x86_64": [],', txt)
 # Fail here, not hours later, when a new release moves the flags.
-assert '"-mavx2"' not in txt, "mozjs patch no longer matches: -mavx2 is still in " + path
+for pattern in (r'if arch == "x86_64" and os != "windows" else \[\]\)',
+                r'"//bazel/config:(linux|macos)_x86_64": \["-mavx2"\]'):
+    assert not re.search(pattern, txt), "mozjs patch no longer matches: " + pattern + " is still in " + path
+# The patch only works if it found the -mavx2 line; it now reads `if False`.
+assert 'if False else [])' in txt, "mozjs patch no longer matches: the x86_64 -mavx2 line moved in " + path
 
 with open(path, "w") as f:
     f.write(txt)
