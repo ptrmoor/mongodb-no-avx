@@ -1,0 +1,116 @@
+name: build
+
+# Builds the newest MongoDB 8.0.x without AVX once it is released, tests it on an
+# emulated CPU without AVX and publishes ghcr.io/ptrmoor/mongodb-no-avx:<version> and :8.0.
+# GitHub cannot trigger on another repo's release, so a daily run compares the newest
+# r8.0.x tag of mongodb/mongo with the published tags. A manual run always rebuilds.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/ptrmoor/mongodb-no-avx
+
+jobs:
+  check:
+    name: Find new version
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      packages: read
+    outputs:
+      version: ${{ steps.find.outputs.version }}
+      build: ${{ steps.find.outputs.build }}
+    steps:
+      # GitHub turns off schedules after 60 days without commits; this repo rarely gets any.
+      - name: Keep the schedule enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/enable"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compare newest release with published tags
+        id: find
+        env:
+          FORCE: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          version=$(git ls-remote --tags --refs https://github.com/mongodb/mongo 'r8.0.*' \
+            | sed -n 's#.*refs/tags/r\(8\.0\.[0-9]*\)$#\1#p' | sort -V | tail -1)
+          [[ $version =~ ^8\.0\.[0-9]+$ ]] || { echo "::error::no r8.0.x tag found"; exit 1; }
+          if [[ $FORCE == true ]] || ! docker manifest inspect "$IMAGE:$version" >/dev/null 2>&1; then
+            build=true
+          else
+            build=false
+          fi
+          echo "MongoDB $version, build: $build" >> "$GITHUB_STEP_SUMMARY"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ needs.check.outputs.version }}
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-26.04
+    # A from-source MongoDB build takes hours; 360 is the hosted-runner maximum.
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          df -h /
+
+      - name: Install QEMU
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static
+
+      # The official image needs AVX; if it does not die with SIGILL (132), the test cannot see AVX.
+      - name: Check that the test catches AVX
+        run: |
+          rc=0
+          ./test-no-avx.sh docker.io/library/mongo:8.0 || rc=$?
+          [[ $rc == 132 ]] || { echo "::error::official mongo:8.0 did not die with SIGILL (exit $rc)"; exit 1; }
+
+      - name: Build
+        run: docker build --build-arg MONGO_VERSION="$VERSION" -t "$IMAGE:$VERSION" .
+
+      - name: Test without AVX
+        run: ./test-no-avx.sh "$IMAGE:$VERSION"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        run: |
+          docker tag "$IMAGE:$VERSION" "$IMAGE:8.0"
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:8.0"
