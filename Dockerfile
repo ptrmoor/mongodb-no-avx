@@ -42,7 +42,9 @@ WORKDIR /src
 RUN sed -i \
         -e 's/-march=sandybridge/-march=x86-64-v2/g' \
         -e 's/-mprefer-vector-width=128/-mno-avx -mno-avx2/g' \
-        bazel/toolchains/cc/mongo_linux/mongo_compiler_flags.bzl
+        bazel/toolchains/cc/mongo_linux/mongo_compiler_flags.bzl && \
+    ! grep -q -- '-march=sandybridge' bazel/toolchains/cc/mongo_linux/mongo_compiler_flags.bzl && \
+    grep -q -- '-march=x86-64-v2' bazel/toolchains/cc/mongo_linux/mongo_compiler_flags.bzl
 
 # 2. mozjs: remove -mavx2 flags and stub out AVX2 SIMD functions
 RUN python3 - << 'PATCHEOF'
@@ -55,6 +57,8 @@ with open(path) as f:
 txt = txt.replace('] if arch == "x86_64" and os != "windows" else [])', '] if False else [])')
 txt = re.sub(r'"//bazel/config:linux_x86_64": \["-mavx2"\],', '"//bazel/config:linux_x86_64": [],', txt)
 txt = re.sub(r'"//bazel/config:macos_x86_64": \["-mavx2"\],', '"//bazel/config:macos_x86_64": [],', txt)
+# Fail here, not hours later, when a new release moves the flags.
+assert '"-mavx2"' not in txt, "mozjs patch no longer matches: -mavx2 is still in " + path
 
 with open(path, "w") as f:
     f.write(txt)
@@ -76,13 +80,16 @@ PATCHEOF
 # 3. CRoaring: disable AVX2/AVX512 intrinsics (uses __attribute__((target("avx2")))
 #    which bypasses -mno-avx2, so we must define ROARING_DISABLE_X64)
 RUN sed -i 's/mongo_cc_library(/mongo_cc_library(\n    copts = ["-DROARING_DISABLE_X64"],/' \
-        src/third_party/croaring/BUILD.bazel
+        src/third_party/croaring/BUILD.bazel && \
+    grep -q ROARING_DISABLE_X64 src/third_party/croaring/BUILD.bazel
 
 # === BUILD SYSTEM PATCHES ===
 
-# 4. Toolchain: add /src to builtin include dirs (fixes absolute path inclusion error in Docker)
-RUN sed -i 's|COMMON_BUILTIN_INCLUDE_DIRECTORIES = \[|COMMON_BUILTIN_INCLUDE_DIRECTORIES = [\n    "/src",|' \
-        bazel/toolchains/cc/mongo_linux/mongo_toolchain_flags_v4.bzl
+# 4. Toolchain: add /src to builtin include dirs (fixes absolute path inclusion error in Docker).
+#    Matches both "= [" (8.0.26) and "= OPENSSL_INCLUDE_DIRS + [" (8.0.38).
+RUN sed -i 's|^\(COMMON_BUILTIN_INCLUDE_DIRECTORIES = .*\[\)$|\1\n    "/src",|' \
+        bazel/toolchains/cc/mongo_linux/mongo_toolchain_flags_v4.bzl && \
+    grep -q '^    "/src",$' bazel/toolchains/cc/mongo_linux/mongo_toolchain_flags_v4.bzl
 
 # 5. Enterprise stubs: create empty BUILD files for enterprise packages referenced by community build
 RUN python3 - << 'STUBEOF'
